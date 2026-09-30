@@ -1,0 +1,7 @@
+Style/EachWithObject:
+  Exclude:
+    - 'libraries/NimbusJenkinsCascHelper.rb'
+    - 'libraries/NimbusJenkinsMbjHelper.rb'
+Style/FileWrite:
+  Exclude:
+    - 'Rakefile'

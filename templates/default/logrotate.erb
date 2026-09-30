@@ -1,0 +1,7 @@
+/var/log/jenkins/<%= @logfile %> {
+    daily
+    missingok
+    notifempty
+    rotate 2
+    create 0600 <%= node['nimbus-jenkins']['user'] %> <%= node['nimbus-jenkins']['group'] %>
+}

@@ -1,0 +1,157 @@
+#!/bin/bash
+
+set -x
+
+function_fix_networking () {
+  # fix networking when eth0 file exists but is not in use
+  eth0_in_use=`ifconfig -s|grep ^eth0|wc -l`
+  if [ $eth0_in_use -eq "0" ] ; then
+    rm -fr /etc/sysconfig/network-scripts/ifcfg-eth0
+    for PATH_DHCLIENT_PID in /var/run/dhclient* ; do
+      export PATH_DHCLIENT_PID
+      dhclient -r
+      # Making sure it really truly stopped
+      kill $(<PATH_DHCLIENT_PID)
+      rm -f $PATH_DHCLIENT_PID
+    done
+    systemctl restart network
+  fi
+
+  # fix networking when any ens* file exists but is not in use
+  ens_in_use=`ifconfig -s|grep ^ens|wc -l`
+  if [ $ens_in_use -eq "0" ] ; then
+    rm -fr /etc/sysconfig/network-scripts/ifcfg-ens*
+    for PATH_DHCLIENT_PID in /var/run/dhclient* ; do
+      export PATH_DHCLIENT_PID
+      dhclient -r
+      # Making sure it really truly stopped
+      kill $(<PATH_DHCLIENT_PID)
+      rm -f $PATH_DHCLIENT_PID
+    done
+    systemctl restart network
+  fi
+}
+
+function_install_rpms () {
+  # clean up python
+  yum remove -y python36
+  yum install -y python36
+  yum install -y python36-pip
+
+  # install needed packages
+  packs="curl git jq rubygems secretsquirrel unzip wget python-setuptools python2-pip python3 python3-devel python3-libs python3-pip python3-setuptools kernel"
+  for package in $packs; do
+    yum install -y $package
+  done
+}
+
+function_install_awscliv1 () {
+  # install awscli from AWS
+  rm -fr /usr/local/bin/aws
+  rm -fr /usr/local/bin/aws_completer
+  curl "https://s3.amazonaws.com/aws-cli/awscli-bundle-<%= @awscli_version %>.zip" -o "/usr/local/src/awscliv1.zip"
+  unzip -q -o "/usr/local/src/awscliv1.zip" -d "/usr/local/awscli-<%= @awscli_version %>"
+  /usr/local/awscli-<%= @awscli_version %>/awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+
+  # setup AWS client
+  mkdir -p /root/.aws
+  echo "[default]" > /root/.aws/config
+  echo "region = <%= @region %>" >> /root/.aws/config
+}
+
+function_set_hostname () {
+  # set hostname
+  echo "`$curl http://169.254.169.254/latest/meta-data/local-ipv4` $new_hostname" >> /etc/hosts
+  `which hostnamectl` set-hostname $new_hostname
+
+  # disable selinux
+  echo "SELINUX=disabled" > /etc/selinux/config
+  setenforce 0 || true
+
+  # disable iptables
+  /bin/systemctl stop iptables.service
+  chkconfig iptables off
+}
+
+function_install_chef_client() {
+  # remove any existing chef RPM
+  rpm -q chef && rpm -e chef
+
+  # install chef client
+  curl -L https://www.chef.io/chef/install.sh | bash -s -- -v 17
+
+  # create required bootstrap dirs/files
+  mkdir -p /var/chef/cache /var/chef/cookbooks /etc/chef /var/lib/chef /var/log/chef
+
+  # add ec2 ohai hints
+  mkdir -p /etc/chef/ohai/hints && touch ${_}/ec2.json
+}
+
+function_setup_chef_client () {
+  # Create first-boot.json
+  cat <<-FIRSTBOOT > /etc/chef/first-boot.json
+{
+  "run_list" :[
+    "role[<%= @chef_role %>]"
+  ]
+}
+FIRSTBOOT
+
+# create chef client configuration
+  cat <<-CHEFCLIENT > /etc/chef/client.rb
+chef_server_url "<%= @chef_server %>/organizations/skyline"
+environment "<%= @chef_environment %>"
+node_name "$new_hostname"
+ssl_verify_mode :verify_none
+validation_client_name "skyline-validator"
+validation_key "/etc/chef/validation.pem"
+CHEFCLIENT
+}
+
+function_get_chef_validation_key () {
+  # download the chef validation key NAME
+  current_secret_keyname=`aws secretsmanager get-secret-value \
+--secret-id chef-validation-key-saaseng-<%= @chef_environment %> \
+--region <%= @region %> |jq .SecretString -r `
+
+  # download the chef validation key
+  cat <<-VALIDATIONKEY > /etc/chef/validation.pem
+`aws secretsmanager get-secret-value \
+  --secret-id $current_secret_keyname \
+  --region <%= @region %> |jq .SecretString -r `
+VALIDATIONKEY
+  chmod 600 /etc/chef/validation.pem
+}
+
+# output log of userdata to /var/log/user-data.log
+exec &> >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+# set start time
+echo "Start Time: `date +"%Y-%d-%m-%H-%M-%S"`"
+
+export HOME=/root/
+echo "export CHEF_LICENSE=accept-silent"  >> /root/.bashrc
+echo "export AWS_DEFAULT_REGION=<%= @awsregion %>" >> /root/.bashrc
+source /root/.bashrc
+
+# set repo location
+echo "repo.<%= @deployregion %>.nimbus-int.io" > /etc/yum/vars/adrepo
+
+# set curl options
+export curl="curl --max-time 10 --retry 5 --retry-delay 0 --retry-max-time 40"
+
+function_install_rpms
+function_fix_networking
+new_hostname="jenkins-worker-`$curl -s http://169.254.169.254/latest/dynamic/instance-identity/document|jq .instanceId -r`"
+
+function_set_hostname
+function_install_awscliv1
+function_install_chef_client
+function_get_chef_validation_key
+function_setup_chef_client
+
+sed -e '/AuthorizedKeysCommand \/usr\/libexec\/openssh\/ssh-ldap-wrapper/ s/^/#/' -i /etc/ssh/sshd_config
+sed -e 's/AllowGroups root ops users role-security-eng-admin role-security-ops role-security-utility-admin role-security-nessus/AllowGroups root ops users jenkins role-security-eng-admin role-security-ops role-security-utility-admin role-security-nessus/g' -i /etc/ssh/sshd_config
+/bin/systemctl reload sshd
+
+chef-client -j /etc/chef/first-boot.json --environment <%= @chef_environment %> --chef-license accept-silent -l info

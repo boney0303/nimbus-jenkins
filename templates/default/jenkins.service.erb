@@ -1,0 +1,21 @@
+[Unit]
+Description=Jenkins Continuous Integration Server
+Requires=network.target
+After=network.target
+
+[Service]
+Environment="JAVA_OPTS=-Djava.awt.headless=true -Dcasc.jenkins.config=/var/lib/jenkins/casc_configs -Djenkins.install.runSetupWizard=false"
+Environment="JENKINS_DEBUG_LEVEL=5"
+Environment="JENKINS_HOME=<%= @home %>"
+Environment="JENKINS_JAVA_CMD=/etc/alternatives/java"
+Environment="JENKINS_LOG=/var/log/jenkins/jenkins.log"
+Environment="JENKINS_PORT=<%= @port %>"
+Environment="JENKINS_WAR=/usr/share/java/jenkins.war"
+Environment="JENKINS_WEBROOT=/var/cache/jenkins/war"
+Group=jenkins
+NotifyAccess=main
+Restart=on-failure
+SuccessExitStatus=143
+Type=notify
+User=jenkins
+WorkingDirectory="<%= @home %>"

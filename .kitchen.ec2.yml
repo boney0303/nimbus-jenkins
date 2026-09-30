@@ -1,0 +1,157 @@
+---
+driver:
+  name: ec2
+  associate_public_ip: false
+  aws_ssh_key_id: <%= ENV['ChefServerEnvironment'] %>-jenkins-public-key
+  iam_profile_name: <%= ENV['JenkinsInstanceProfile'] %>
+  instance_type: m5.xlarge
+  interface: private
+  region: <%= ENV['AWS_DEFAULT_REGION'] %>
+  security_group_filter:
+    name: <%= ENV['ChefServerEnvironment'] %>-jenkins-workers
+  skip_cost_warning: true
+  subnet_filter:
+    tag: "Name"
+    value: <%= ENV['ChefServerEnvironment'] %>-adm-sub-prv-a
+  tags:
+    CostCenter: 020211745
+    CreatedBy: pdx-d01-support-RoleJenkinsServer-1TW84C0V1NIQL
+    DataClassification: Cisco Highly Confidential
+    DeploymentEnvironment: NonProd
+    Environment: <%= ENV['ChefServerEnvironment'] %>
+    Exception: NA
+    IntendedPublic: False
+    JIRACreation: NA
+    JIRAProject: NA
+    Name: <%= ENV['ChefServerEnvironment'] %>-TestKitchen
+    ResourceOwner: owner@nimbus.io
+    SecurityReview: NA
+    Service: Jenkins
+  user_data: |-
+    #!/bin/bash
+    export AWS_DEFAULT_REGION=`curl -s http://169.254.169.254/latest/dynamic/instance-identity/document|jq .region -r`
+    yum install jq -y &
+    rm -fr /usr/local/bin/aws*
+    curl "https://s3.amazonaws.com/aws-cli/awscli-bundle-1.19.6.zip" -o "/usr/local/src/awscliv1.zip"
+    unzip -q -o "/usr/local/src/awscliv1.zip" -d "/usr/local/awscli-1.19.6"
+    /usr/local/awscli-1.19.6/awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+    echo "SELINUX=disabled" > /etc/selinux/config && setenforce 0 || true
+    /bin/systemctl stop iptables.service && chkconfig iptables off
+    ldap_server="URI ldaps://ldap-<%= ENV['AWS_DEFAULT_REGION'] %>.nimbus.io"
+    sed -e '/^URI/d' -i /etc/pam_ldap.conf && echo $ldap_server >> /etc/pam_ldap.conf
+    sed -e '/^URI/d' -i /etc/nslcd.conf && echo $ldap_server >> /etc/nslcd.conf
+    sed -e '/^URI/d' -i /etc/ssh/ldap.conf && echo $ldap_server >> /etc/ssh/ldap.conf
+    sed -e '/AuthorizedKeysCommand \/usr\/libexec\/openssh\/ssh-ldap-wrapper/ s/^/#/' -i /etc/ssh/sshd_config
+    sed -e '/MaxAuthTries 4/ s/^/#/' -i /etc/ssh/sshd_config
+    sed -e '/AllowGroups root ops users/ s/AllowGroups root ops users/AllowGroups root ops users centos/' -i /etc/ssh/sshd_config
+    /bin/systemctl restart sshd.service
+    groupadd centos && useradd -d /home/centos -g centos -m centos
+    mkdir -p /home/centos/.aws
+    echo "[default]" > /home/centos/.aws/config
+    echo "region = <%= ENV['AWS_DEFAULT_REGION'] %>" >> /home/centos/.aws/config
+    mkdir -p /home/centos/.ssh && chmod 700 /home/centos/.ssh
+    aws secretsmanager get-secret-value --secret-id "infeng/jenkins-public-key" \
+    --region <%= ENV['AWS_DEFAULT_REGION'] %>|jq '.SecretString' -r > /home/centos/.ssh/authorized_keys
+    chmod 600 /home/centos/.ssh/authorized_keys
+    chown -R centos:centos /home/centos
+    echo "%centos  ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/centos
+
+transport:
+  connection_retries: 5
+  connection_timeout: 10
+  ssh_key: "/var/lib/jenkins/.ssh/id_rsa"
+
+# Configure the provisioner (config management)
+provisioner:
+  product_name: chef
+  product_version: 17
+  log_level: info
+  install_strategy: always
+  # location of data_bags' data
+  data_bags_path: "test/integration/data_bags"
+  # location of environments' data
+  environments_path: "test/integration/environments"
+  # location of nodes' data
+  nodes_path: "test/integration/nodes"
+  # location of roles' data
+  roles_path: "test/integration/roles"
+  # client.rb entries
+  client_rb:
+    environment: ci
+
+# Configure the verifier (testing framework)
+verifier:
+  name: inspec
+
+# Enumerate platforms
+# A platform represents a single configuration of an operating system
+# While this is often 1:1, the names allow this to be customizable
+# At least 1 platform is **required**
+platforms:
+  - name: centos-7
+    driver:
+      image_search:
+        name: nimbus-centos-7-cloud9-small-x86_64-hvm-ebs-*
+      block_device_mappings:
+        - device_name: /dev/sda1
+          ebs:
+            delete_on_termination: true
+
+# inspec uses tests located at test/integration/%suite%
+# Enumerate suites
+# At least 1 suite is **required**
+suites:
+  # The name of each suite maps to a configuration / set of tests
+  # Depending on the verifier, default locations may be inferred based on
+  # directory naming
+  - name: master
+    run_list:
+      - recipe[nimbus-splunk::default]
+      - recipe[nimbus-jenkins::master]
+    verifier:
+      inspec_tests:
+        - test/integration/default
+    attributes:
+      nimbus-jenkins:
+        master:
+          packages:
+            jenkins: 2.387.2-1.1
+          support_blitz: 1
+          support_extras: 1
+          support_sreops: 1
+        mbj:
+          security:
+            realm: jenkins_database
+      nimbus-yum:
+        vars:
+          adbranch: latest
+          adrepo: repo.<%= ENV['DeployRegion'] %>.nimbus-int.io
+          contentdir: centos
+          infra: stock
+          release: 7
+          release_major: 7
+      test-kitchen: true
+  - name: worker
+    run_list:
+      - recipe[nimbus-splunk::default]
+      - recipe[nimbus-jenkins::default_worker]
+    verifier:
+      inspec_tests:
+        - test/integration/default
+    attributes:
+      nimbus-jenkins:
+        master:
+          packages:
+            jenkins: 2.387.2-1.1
+        mbj:
+          security:
+            realm: jenkins_database
+      nimbus-yum:
+        vars:
+          adbranch: latest
+          adrepo: repo.<%= ENV['DeployRegion'] %>.nimbus-int.io
+          contentdir: centos
+          infra: stock
+          release: 7
+          release_major: 7
+      test-kitchen: true

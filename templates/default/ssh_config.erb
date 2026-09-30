@@ -1,0 +1,8 @@
+Host *
+  ServerAliveInterval 30
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  AddKeysToAgent yes
+<% for  @this_filename in @filenames -%>
+  IdentityFile ~/.ssh/<%= @this_filename %>
+<% end  -%>

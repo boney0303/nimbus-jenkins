@@ -1,0 +1,57 @@
+---
+# Configure the driver (cloud/hypervisor)
+driver:
+  name: vagrant
+  cachier: true
+  network:
+    - ["forwarded_port", { guest: 8080, host: 8080, auto_correct: true }]
+    - ["private_network", { type: "dhcp" }]
+
+# Configure the provisioner (config management)
+provisioner:
+  name: chef_zero
+  product_name: chef
+  product_version: 15
+  # You may wish to disable always updating cookbooks in CI or other testing environments.
+  # For example:
+  #  always_update_cookbooks: <%= !ENV['CI'] %>
+  install_strategy: always
+  always_update_cookbooks: true
+  data_bags_path: "test/integration/data_bags"
+  environments_path: "test/integration/environments"
+  client_rb:
+    environment: ci
+
+# Configure the verifier (testing framework)
+verifier:
+  name: inspec
+
+# Enumerate platforms
+# A platform represents a single configuration of an operating system
+# While this is often 1:1, the names allow this to be customizable
+# At least 1 platform is **required**
+platforms:
+  # Drivers may support defaults that automatically
+  # map certain names to an image for the given driver
+  - name: centos-7
+    driver:
+      box: bento/centos-7
+
+# inspec uses tests located at test/integration/%suite%
+# Enumerate suites
+# At least 1 suite is **required**
+suites:
+  # The name of each suite maps to a configuration / set of tests
+  # Depending on the verifier, default locations may be inferred based on
+  # directory naming
+  - name: default
+    run_list:
+      - recipe[nimbus-yum::default]
+      - recipe[nimbus-splunk::default]
+      - recipe[nimbus-jenkins::master]
+    verifier:
+      inspec_tests:
+        - test/integration/default
+    attributes:
+      nimbus-jenkins:
+        use_ldap: False

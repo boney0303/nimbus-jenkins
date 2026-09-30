@@ -1,0 +1,76 @@
+#!/bin/bash
+
+set -x
+
+# output log of userdata to /var/log/user-data.log
+exec &> >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+
+# fix networking when eth0 file exists but is not in use
+eth0_in_use=`ifconfig -s|grep ^eth0|wc -l`
+if [ $eth0_in_use -eq "0" ] ; then
+  rm -fr /etc/sysconfig/network-scripts/ifcfg-eth0
+  for PATH_DHCLIENT_PID in /var/run/dhclient* ; do
+    export PATH_DHCLIENT_PID
+    dhclient -r
+    # Making sure it really truly stopped
+    kill $(<PATH_DHCLIENT_PID)
+    rm -f $PATH_DHCLIENT_PID
+  done
+  /bin/systemctl restart network
+fi
+
+# fix networking when any ens* file exists but is not in use
+ens_in_use=`ifconfig -s|grep ^ens|wc -l`
+if [ $ens_in_use -eq "0" ] ; then
+  rm -fr /etc/sysconfig/network-scripts/ifcfg-ens*
+  for PATH_DHCLIENT_PID in /var/run/dhclient* ; do
+    export PATH_DHCLIENT_PID
+    dhclient -r
+    # Making sure it really truly stopped
+    kill $(<PATH_DHCLIENT_PID)
+    rm -f $PATH_DHCLIENT_PID
+  done
+  /bin/systemctl restart network
+fi
+
+yum install -y curl git jq rubygems unzip wget jq python-setuptools python3 python3-devel python3-libs python3-pip python3-setuptools java-1.8.0-openjdk
+
+# install awscli from AWS
+rm -fr /usr/local/bin/aws
+rm -fr /usr/local/bin/aws_completer
+curl "https://s3.amazonaws.com/aws-cli/awscli-bundle-<%= @awscli_version %>.zip" -o "/usr/local/src/awscliv1.zip"
+unzip -q -o "/usr/local/src/awscliv1.zip" -d "/usr/local/awscli-<%= @awscli_version %>"
+/usr/local/awscli-<%= @awscli_version %>/awscli-bundle/install -i /usr/local/aws -b /usr/local/bin/aws
+
+chef_environment="<%= @chef_environment %>"
+
+# setup AWS client
+mkdir -p /root/.aws
+echo "[default]" > /root/.aws/config
+echo "region = <%= @awsregion %>" >> /root/.aws/config
+
+# disable selinux
+echo "SELINUX=disabled" > /etc/selinux/config
+setenforce 0 || true
+
+# disable iptables
+/bin/systemctl stop iptables.service && chkconfig iptables off
+
+export AWS_DEFAULT_REGION="<%= @awsregion %>"
+
+sed -e '/AuthorizedKeysCommand \/usr\/libexec\/openssh\/ssh-ldap-wrapper/ s/^/#/' -i /etc/ssh/sshd_config
+sed -e 's/AllowGroups root ops users role-security-eng-admin role-security-ops role-security-utility-admin role-security-nessus/AllowGroups root ops users jenkins role-security-eng-admin role-security-ops role-security-utility-admin role-security-nessus/g' -i /etc/ssh/sshd_config
+/bin/systemctl reload sshd
+
+groupadd jenkins
+useradd -d /var/lib/jenkins -c "Jenkins Automation Server -Worker Node" -g jenkins -m jenkins
+
+mkdir -p /var/lib/jenkins/.ssh && chmod 700 /var/lib/jenkins/.ssh
+aws secretsmanager get-secret-value --secret-id "saaseng/<%= @chef_environment %>-jenkins-public-key" --region "<%= @awsregion %>" | jq '.SecretString' -r > /home/jenkins/.ssh/authorized_keys
+chmod 600 /var/lib/jenkins/.ssh/authorized_keys
+chown -R jenkins:jenkins /var/lib/jenkins
+
+echo "%jenkins  ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jenkins
+
+# remove old packages
+rpm -q chef && rpm -e chef

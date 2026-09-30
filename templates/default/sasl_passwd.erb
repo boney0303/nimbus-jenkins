@@ -1,0 +1,5 @@
+<% if node['ec2']['region'] == "us-west-2" %>
+[email-smtp.us-west-2.amazonaws.com]:587 <%=node['nimbus-jenkins']['sreops']['ses_smtp_user']%>:<%=node['nimbus-jenkins']['sreops']['ses_token']%>
+<% else %>
+[email-smtp.eu-west-1.amazonaws.com]:587 <%=node['nimbus-jenkins']['sreops']['ses_smtp_user']%>:<%=node['nimbus-jenkins']['sreops']['ses_token']%>
+<% end %>

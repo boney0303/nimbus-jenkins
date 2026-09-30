@@ -1,0 +1,21 @@
+JENKINS_HOME="<%= node['nimbus-jenkins']['home'] %>"
+JENKINS_JAVA_CMD=""
+JENKINS_USER="<%= node['nimbus-jenkins']['user'] %>"
+JENKINS_JAVA_OPTIONS="-Djava.awt.headless=true"
+<% if node['nimbus-jenkins']['java_options'] %>
+JENKINS_JAVA_OPTIONS="$JENKINS_JAVA_OPTIONS <%= node['nimbus-jenkins']['java_options'] %>"
+<% end %>
+JENKINS_PORT="<%= node['nimbus-jenkins']['port'] %>"
+JENKINS_LISTEN_ADDRESS="<%= node['nimbus-jenkins']['listen_address'] %>"
+JENKINS_HTTPS_PORT=""
+JENKINS_HTTPS_LISTEN_ADDRESS=""
+JENKINS_AJP_PORT="8009"
+JENKINS_AJP_LISTEN_ADDRESS=""
+JENKINS_DEBUG_LEVEL="5"
+JENKINS_ENABLE_ACCESS_LOG="<%= node['nimbus-jenkins']['enable_access_log'] %>"
+JENKINS_HANDLER_MAX="100"
+JENKINS_HANDLER_IDLE="20"
+JENKINS_ARGS=""
+<% if node['nimbus-jenkins']['jenkins_args'] %>
+JENKINS_ARGS="$JENKINS_ARGS <%= node['nimbus-jenkins']['jenkins_args'] %>"
+<% end %>
